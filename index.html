@@ -1,15 +1,15 @@
- <!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <title>Desk Emo</title>
+  <title>Desk Emo AI</title>
   <style>
-    * { box-sizing: border-box; margin: 0; padding: 0; }
+    * { box-sizing: border-box; margin: 0; padding: 0; user-select: none; }
     body {
-      background-color: #0a0a0f;
-      color: #fff;
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background-color: #030712;
+      color: #f8fafc;
+      font-family: system-ui, -apple-system, sans-serif;
       height: 100vh;
       display: flex;
       flex-direction: column;
@@ -18,214 +18,416 @@
       overflow: hidden;
       touch-action: manipulation;
     }
-    #face-canvas {
-      width: 320px;
-      height: 240px;
-      margin-top: auto;
-      margin-bottom: 20px;
+    #stage {
+      flex: 1;
+      width: 100%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      position: relative;
     }
-    .bottom-panel {
+    #face-canvas {
       width: 100%;
       max-width: 480px;
-      padding: 20px;
-      text-align: center;
-      margin-bottom: 20px;
+      height: 320px;
+      cursor: pointer;
     }
-    #status {
-      font-size: 14px;
-      color: #888ea8;
-      min-height: 40px;
-      margin-bottom: 15px;
+    .hud {
+      width: 100%;
+      max-width: 460px;
+      padding: 16px 20px 24px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 12px;
+      z-index: 10;
+    }
+    #dialogue {
+      font-size: 15px;
+      color: #94a3b8;
+      text-align: center;
+      min-height: 44px;
       line-height: 1.4;
+      padding: 0 12px;
     }
     .btn-row {
       display: flex;
       gap: 10px;
+      width: 100%;
       justify-content: center;
     }
     button {
-      background: #161622;
-      border: 1px solid #2a2a3c;
-      color: #00e5ff;
-      padding: 10px 20px;
-      border-radius: 20px;
+      background: #0f172a;
+      border: 1px solid #334155;
+      color: #38bdf8;
+      padding: 12px 22px;
+      border-radius: 9999px;
       font-size: 14px;
+      font-weight: 600;
       cursor: pointer;
-      outline: none;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.5);
+      transition: background 0.15s ease, transform 0.1s ease;
     }
-    button:active { background: #00e5ff; color: #000; }
+    button:active {
+      transform: scale(0.96);
+      background: #1e293b;
+    }
     #video { display: none; }
   </style>
 </head>
 <body>
 
-  <canvas id="face-canvas" width="320" height="240"></canvas>
+  <div id="stage">
+    <canvas id="face-canvas" width="480" height="320"></canvas>
+  </div>
   <video id="video" playsinline autoplay muted></video>
 
-  <div class="bottom-panel">
-    <div id="status">Tap "Start Companion" to wake Emo up.</div>
+  <div class="hud">
+    <div id="dialogue">Tap "Boot Emo" to wake up.</div>
     <div class="btn-row">
-      <button id="start-btn">Start Companion</button>
-      <button id="scare-btn">🔫 Scare</button>
+      <button id="boot-btn">⚡ Boot Emo</button>
+      <button id="panic-btn">🔫 Gun Trigger</button>
+      <button id="reset-key-btn" style="color: #64748b; font-size: 12px; padding: 12px 16px;">🔑 Key</button>
     </div>
   </div>
 
   <script>
-    // --- CONFIGURATION ---
-    const GEMINI_API_KEY = "AQ.Ab8RN6JE2v8jz8OvIRqkhfYEZN234o8co2DXpdObt76Ej7peEA";
     const USER_NAME = "Agam";
+    let API_KEY = localStorage.getItem("desk_emo_key") || "AQ.Ab8RN6JE2v8jz8OvIRqkhfYEZN234o8co2DXpdObt76Ej7peEA";
 
     const canvas = document.getElementById("face-canvas");
     const ctx = canvas.getContext("2d");
-    const statusEl = document.getElementById("status");
-    const startBtn = document.getElementById("start-btn");
-    const scareBtn = document.getElementById("scare-btn");
+    const dialogueEl = document.getElementById("dialogue");
+    const bootBtn = document.getElementById("boot-btn");
+    const panicBtn = document.getElementById("panic-btn");
+    const resetKeyBtn = document.getElementById("reset-key-btn");
     const video = document.getElementById("video");
 
-    let currentMood = "happy";
+    let currentMood = "idle";
     let isSpeaking = false;
-    let animPulse = 0;
-    let pulseDir = 1;
+    let isListening = false;
+    let look = { x: 0, y: 0 };
+    let targetLook = { x: 0, y: 0 };
+    let blink = 0;
+    let isBlinking = false;
+    let animTimer = null;
 
-    // --- PROCEDURAL FACE RENDERER ---
-    function drawFace() {
+    // --- PROCEDURAL AUDIO SYNTH (ROBOT FX) ---
+    const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+
+    function playTone(freq, duration, type = "sine") {
+      if (audioCtx.state === "suspended") audioCtx.resume();
+      const osc = audioCtx.createOscillator();
+      const gain = audioCtx.createGain();
+      osc.type = type;
+      osc.frequency.setValueAtTime(freq, audioCtx.currentTime);
+      gain.gain.setValueAtTime(0.08, audioCtx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.0001, audioCtx.currentTime + duration);
+      osc.connect(gain);
+      gain.connect(audioCtx.destination);
+      osc.start();
+      osc.stop(audioCtx.currentTime + duration);
+    }
+
+    function soundFx(type) {
+      if (type === "chirp") {
+        playTone(600, 0.08);
+        setTimeout(() => playTone(900, 0.12), 60);
+      } else if (type === "scared") {
+        playTone(300, 0.1, "sawtooth");
+        setTimeout(() => playTone(200, 0.2, "sawtooth"), 80);
+      } else if (type === "happy") {
+        playTone(523.25, 0.08);
+        setTimeout(() => playTone(659.25, 0.08), 80);
+        setTimeout(() => playTone(783.99, 0.12), 160);
+      }
+    }
+
+    // --- PROCEDURAL EYES ENGINE ---
+    function triggerBlink() {
+      if (isBlinking) return;
+      isBlinking = true;
+      let phase = 0;
+      const interval = setInterval(() => {
+        phase += 0.25;
+        if (phase <= 1) {
+          blink = phase;
+        } else {
+          blink = 2 - phase;
+          if (blink <= 0) {
+            blink = 0;
+            isBlinking = false;
+            clearInterval(interval);
+          }
+        }
+      }, 16);
+    }
+
+    setInterval(() => {
+      if (currentMood !== "scared" && Math.random() > 0.45) {
+        targetLook.x = (Math.random() - 0.5) * 26;
+        targetLook.y = (Math.random() - 0.5) * 14;
+        if (Math.random() > 0.5) triggerBlink();
+      }
+    }, 2400);
+
+    function drawEye(x, y, w, h, radius, slant = 0, topCut = 0, botCut = 0, color = "#00f0ff") {
+      ctx.save();
+      ctx.translate(x, y);
+      if (slant !== 0) ctx.rotate(slant);
+
+      ctx.beginPath();
+      ctx.roundRect(-w / 2, -h / 2, w, h, radius);
+      ctx.clip();
+
+      ctx.fillStyle = color;
+      ctx.shadowColor = color;
+      ctx.shadowBlur = 18;
+      ctx.fillRect(-w / 2, -h / 2, w, h);
+
+      if (topCut > 0) {
+        ctx.fillStyle = "#030712";
+        ctx.fillRect(-w / 2, -h / 2, w, h * topCut);
+      }
+      if (botCut > 0) {
+        ctx.fillStyle = "#030712";
+        ctx.fillRect(-w / 2, h / 2 - (h * botCut), w, h * botCut);
+      }
+      ctx.restore();
+    }
+
+    function render() {
       ctx.clearRect(0, 0, canvas.width, canvas.height);
-      ctx.lineWidth = 12;
-      ctx.lineCap = "round";
-      ctx.strokeStyle = "#00e5ff";
-      ctx.fillStyle = "#00e5ff";
 
-      animPulse += 0.05 * pulseDir;
-      if (animPulse > 1 || animPulse < 0) pulseDir *= -1;
+      look.x += (targetLook.x - look.x) * 0.18;
+      look.y += (targetLook.y - look.y) * 0.18;
 
-      const r = 38 + animPulse * 2;
-      const left = { x: canvas.width / 2 - 58, y: canvas.height / 2 };
-      const right = { x: canvas.width / 2 + 58, y: canvas.height / 2 };
+      const cx = canvas.width / 2 + look.x;
+      const cy = canvas.height / 2 + look.y;
+      const eyeW = 82;
+      const eyeH = 104;
+      const r = 36;
+      const spacing = 72;
 
-      if (currentMood === "happy") {
-        ctx.beginPath();
-        ctx.arc(left.x, left.y, r, Math.PI, 0, false);
-        ctx.stroke();
-        ctx.beginPath();
-        ctx.arc(right.x, right.y, r, Math.PI, 0, false);
-        ctx.stroke();
-      } else if (currentMood === "scared") {
-        const j = (Math.random() - 0.5) * 6;
-        ctx.beginPath();
-        ctx.arc(left.x + j, left.y + j, r * 0.45, 0, Math.PI * 2);
-        ctx.arc(right.x - j, right.y + j, r * 0.45, 0, Math.PI * 2);
-        ctx.fill();
-      } else if (currentMood === "bored" || currentMood === "sleepy") {
-        ctx.fillRect(left.x - 30, left.y - 6, 60, 12);
-        ctx.fillRect(right.x - 30, right.y - 6, 60, 12);
-      } else if (currentMood === "thinking") {
-        ctx.beginPath();
-        ctx.arc(left.x, left.y - 12, r * 0.85, 0, Math.PI * 2);
-        ctx.arc(right.x, right.y - 12, r * 0.85, 0, Math.PI * 2);
-        ctx.fill();
-      } else {
-        // Neutral / Glowing default
-        ctx.beginPath();
-        ctx.arc(left.x, left.y, r, 0, Math.PI * 2);
-        ctx.arc(right.x, right.y, r, 0, Math.PI * 2);
-        ctx.fill();
+      let leftX = cx - spacing;
+      let rightX = cx + spacing;
+      let topLid = blink;
+      let botLid = blink * 0.25;
+
+      switch (currentMood) {
+        case "happy":
+          botLid = Math.max(botLid, 0.48);
+          drawEye(leftX, cy, eyeW, eyeH, r, 0, topLid, botLid, "#00f0ff");
+          drawEye(rightX, cy, eyeW, eyeH, r, 0, topLid, botLid, "#00f0ff");
+          break;
+
+        case "angry":
+          drawEye(leftX, cy, eyeW, eyeH * 0.8, r, 0.22, topLid, 0, "#ef4444");
+          drawEye(rightX, cy, eyeW, eyeH * 0.8, r, -0.22, topLid, 0, "#ef4444");
+          break;
+
+        case "scared":
+          const shakeX = (Math.random() - 0.5) * 10;
+          const shakeY = (Math.random() - 0.5) * 10;
+          drawEye(leftX + shakeX, cy + shakeY, 40, 40, 20, 0, 0, 0, "#c084fc");
+          drawEye(rightX + shakeX, cy + shakeY, 40, 40, 20, 0, 0, 0, "#c084fc");
+          break;
+
+        case "curious":
+          drawEye(leftX, cy - 8, eyeW * 1.08, eyeH * 1.08, r, 0, topLid, botLid, "#38bdf8");
+          drawEye(rightX, cy + 6, eyeW * 0.9, eyeH * 0.8, r, 0, Math.max(topLid, 0.35), botLid, "#38bdf8");
+          break;
+
+        case "love":
+          ctx.fillStyle = "#fb7185";
+          ctx.shadowColor = "#fb7185";
+          ctx.shadowBlur = 18;
+          drawHeart(leftX, cy, 32);
+          drawHeart(rightX, cy, 32);
+          break;
+
+        default:
+          drawEye(leftX, cy, eyeW, eyeH, r, 0, topLid, botLid, "#00f0ff");
+          drawEye(rightX, cy, eyeW, eyeH, r, 0, topLid, botLid, "#00f0ff");
+          break;
       }
 
-      requestAnimationFrame(drawFace);
+      requestAnimationFrame(render);
     }
-    drawFace();
 
-    // --- SPEECH OUTPUT (TTS) ---
+    function drawHeart(x, y, s) {
+      ctx.save();
+      ctx.translate(x, y);
+      ctx.beginPath();
+      ctx.moveTo(0, s / 3);
+      ctx.bezierCurveTo(-s, -s / 2, -s * 1.3, s / 3, 0, s * 1.3);
+      ctx.bezierCurveTo(s * 1.3, s / 3, s, -s / 2, 0, s / 3);
+      ctx.fill();
+      ctx.restore();
+    }
+
+    render();
+
+    function setMood(m, resetMs = 0) {
+      currentMood = m;
+      clearTimeout(animTimer);
+      if (resetMs > 0) {
+        animTimer = setTimeout(() => currentMood = "idle", resetMs);
+      }
+    }
+
+    // --- SPEECH OUTPUT ---
     function speak(text) {
       if (!window.speechSynthesis) return;
       isSpeaking = true;
+      stopListening();
       speechSynthesis.cancel();
 
-      const utterance = new SpeechSynthesisUtterance(text);
-      utterance.pitch = 1.35;
-      utterance.rate = 1.0;
-      utterance.onend = () => {
-        isSpeaking = false;
-        listen();
+      const utter = new SpeechSynthesisUtterance(text);
+      utter.pitch = 1.35;
+      utter.rate = 1.08;
+
+      utter.onstart = () => {
+        dialogueEl.style.color = "#38bdf8";
+        dialogueEl.textContent = text;
       };
-      statusEl.textContent = text;
-      speechSynthesis.speak(utterance);
+
+      utter.onend = () => {
+        isSpeaking = false;
+        dialogueEl.style.color = "#94a3b8";
+        setTimeout(startListening, 300);
+      };
+
+      speechSynthesis.speak(utter);
     }
 
-    // --- GEMINI API CALL ---
-    async function askGemini(prompt) {
-      currentMood = "thinking";
-      statusEl.textContent = "Thinking...";
+    // --- GEMINI PROMPT WITH STRUCTURED JSON MOODS ---
+    async function consultGemini(prompt) {
+      if (!API_KEY) {
+        speak("Missing API Key. Click the key button below.");
+        return;
+      }
+
+      setMood("curious");
+      dialogueEl.textContent = `Hearing: "${prompt}"`;
+      soundFx("chirp");
+
+      const systemPrompt = `You are Desk Emo, a witty, lifelike desk pet robot for ${USER_NAME}. Keep replies under 2 short sentences. Respond ONLY in valid JSON with two fields: "mood" (must be one of: "happy", "angry", "scared", "curious", "love", "idle") and "reply" (your spoken message to ${USER_NAME}). Do not write markdown or code blocks.`;
 
       try {
-        const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${GEMINI_API_KEY}`, {
+        const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${API_KEY}`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            contents: [{ parts: [{ text: `You are Desk Emo, a witty, robotic desktop pet companion for ${USER_NAME}. Keep answers under 2 short sentences. User said: ${prompt}` }] }]
+            contents: [
+              { role: "user", parts: [{ text: `${systemPrompt}\nUser says: ${prompt}` }] }
+            ]
           })
         });
 
         const data = await res.json();
-        const reply = data.candidates?.[0]?.content?.parts?.[0]?.text || "I drew a blank.";
-        currentMood = "happy";
-        speak(reply);
-      } catch (err) {
-        currentMood = "bored";
-        speak("Could not reach Gemini.");
+        const raw = data.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || "";
+        const clean = raw.replace(/```json/g, "").replace(/```/g, "").trim();
+        const parsed = JSON.parse(clean);
+
+        setMood(parsed.mood || "idle", 6000);
+        soundFx(parsed.mood === "love" ? "happy" : "chirp");
+        speak(parsed.reply);
+      } catch (_) {
+        setMood("idle");
+        speak("I got mixed up on that one.");
       }
     }
 
-    // --- SPEECH RECOGNITION (STT) ---
-    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-    let recognition;
+    // --- PERSISTENT MOBILE STT ---
+    const SpeechRecognizer = window.SpeechRecognition || window.webkitSpeechRecognition;
+    let rec;
 
     function initSpeech() {
-      if (!SpeechRecognition) {
-        statusEl.textContent = "Speech recognition not supported in this browser. Use Chrome.";
+      if (!SpeechRecognizer) {
+        dialogueEl.textContent = "Voice input unsupported on this browser. Use Chrome.";
         return;
       }
-      recognition = new SpeechRecognition();
-      recognition.continuous = false;
-      recognition.interimResults = false;
-      recognition.lang = "en-US";
+      rec = new SpeechRecognizer();
+      rec.continuous = false;
+      rec.interimResults = false;
+      rec.lang = "en-US";
 
-      recognition.onresult = (e) => {
-        const transcript = e.results[0][0].transcript;
-        askGemini(transcript);
+      rec.onresult = (e) => {
+        const text = e.results[0][0].transcript.trim();
+        if (text) consultGemini(text);
       };
 
-      recognition.onend = () => {
-        if (!isSpeaking) listen();
+      rec.onend = () => {
+        isListening = false;
+        if (!isSpeaking) setTimeout(startListening, 300);
+      };
+
+      rec.onerror = () => {
+        isListening = false;
+        if (!isSpeaking) setTimeout(startListening, 700);
       };
     }
 
-    function listen() {
-      if (isSpeaking) return;
-      try { recognition.start(); } catch (_) {}
+    function startListening() {
+      if (isSpeaking || isListening || !rec) return;
+      try {
+        rec.start();
+        isListening = true;
+      } catch (_) {}
     }
 
-    // --- CAMERA & PRESENCE ---
-    async function initCamera() {
+    function stopListening() {
+      if (!rec || !isListening) return;
+      try { rec.stop(); } catch (_) {}
+      isListening = false;
+    }
+
+    // --- ACTIONS ---
+    bootBtn.onclick = async () => {
+      if (!API_KEY) {
+        const key = prompt("Enter your Gemini API Key:");
+        if (key && key.trim()) {
+          API_KEY = key.trim();
+          localStorage.setItem("desk_emo_key", API_KEY);
+        } else {
+          return;
+        }
+      }
+
+      bootBtn.style.display = "none";
+      audioCtx.resume();
+      initSpeech();
+
       try {
         const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "user" } });
         video.srcObject = stream;
-      } catch (e) {
-        console.log("Camera access ignored or unavailable");
-      }
-    }
+      } catch (_) {}
 
-    // --- CONTROLS ---
-    startBtn.onclick = async () => {
-      startBtn.style.display = "none";
-      initSpeech();
-      await initCamera();
-      speak(`Hey ${USER_NAME}! Desk Emo is online.`);
+      soundFx("happy");
+      setMood("happy", 3000);
+      speak(`Hey ${USER_NAME}! Desk Emo is fully awake.`);
     };
 
-    scareBtn.onclick = () => {
-      currentMood = "scared";
-      speak("Don't shoot! I'm just a cute bot!");
+    panicBtn.onclick = () => {
+      soundFx("scared");
+      setMood("scared", 5000);
+      speak("Hands down! Don't point fingers at me!");
+    };
+
+    resetKeyBtn.onclick = () => {
+      const key = prompt("Update Gemini API Key:", API_KEY);
+      if (key !== null) {
+        API_KEY = key.trim();
+        localStorage.setItem("desk_emo_key", API_KEY);
+        alert("Key saved.");
+      }
+    };
+
+    canvas.onclick = () => {
+      soundFx("happy");
+      setMood("love", 3500);
+      speak(`Nice to see you, ${USER_NAME}!`);
     };
   </script>
 </body>
